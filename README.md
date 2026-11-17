@@ -6,7 +6,7 @@ clean or find it safely.
 
 ## Install
 
-Download the signed, notarized disk image from [GitHub Releases](https://github.com/Anemo-Studio/mikko-app/releases/latest), or:
+Download the signed, notarized app (ZIP) from [GitHub Releases](https://github.com/Anemo-Studio/mikko-app/releases/latest), or:
 
 ```bash
 brew install --cask anemo-studio/tap/mikko
@@ -20,7 +20,7 @@ Requires Xcode 26 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 
 ```bash
 scripts/build.sh            # builds mikko.app with the CLI embedded, ad-hoc signed
-TEAM_ID=… scripts/release.sh  # Developer ID archive → notarized, stapled DMG
+scripts/release.sh          # Developer ID archive → notarized, stapled ZIP (Xcode account, team ANEMO STUDIJA)
 open .build/xc/Build/Products/Debug/mikko.app
 swift test                  # unit tests (no Xcode project needed)
 ```

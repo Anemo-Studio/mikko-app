@@ -24,8 +24,9 @@ public enum UpdateCheck {
             let assets: [Asset]?
         }
         guard let p = try? JSONDecoder().decode(Payload.self, from: data), p.draft != true, p.prerelease != true else { return nil }
-        let dmg = p.assets?.first { $0.name.hasSuffix(".dmg") }?.browser_download_url
-        return Release(version: normalized(p.tag_name), pageURL: p.html_url, downloadURL: dmg)
+        // The app ships as a stapled ZIP; a disk image is accepted too.
+        let asset = p.assets?.first { $0.name.hasSuffix(".zip") || $0.name.hasSuffix(".dmg") }?.browser_download_url
+        return Release(version: normalized(p.tag_name), pageURL: p.html_url, downloadURL: asset)
     }
 
     /// "v1.2.0" → "1.2.0".

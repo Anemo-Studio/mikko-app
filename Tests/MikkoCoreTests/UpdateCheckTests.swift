@@ -9,15 +9,15 @@ import Testing
     #expect(!UpdateCheck.isNewer("v0.9", than: "1.0"))
 }
 
-@Test func parsesLatestReleaseAndPicksTheDiskImage() throws {
+@Test func parsesLatestReleaseAndPicksTheAppArchive() throws {
     let json = """
     {"tag_name":"v1.2.0","html_url":"https://github.com/Anemo-Studio/mikko-app/releases/tag/v1.2.0","draft":false,"prerelease":false,
      "assets":[{"name":"checksums.txt","browser_download_url":"https://example.com/c.txt"},
-               {"name":"mikko-1.2.0.dmg","browser_download_url":"https://example.com/mikko-1.2.0.dmg"}]}
+               {"name":"mikko-1.2.0.zip","browser_download_url":"https://example.com/mikko-1.2.0.zip"}]}
     """
     let r = try #require(UpdateCheck.parse(Data(json.utf8)))
     #expect(r.version == "1.2.0")
-    #expect(r.downloadURL?.lastPathComponent == "mikko-1.2.0.dmg")
+    #expect(r.downloadURL?.lastPathComponent == "mikko-1.2.0.zip")
 }
 
 @Test func neverOffersPrereleases() {
