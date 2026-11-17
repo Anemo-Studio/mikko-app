@@ -362,3 +362,29 @@ private func claudeFixture() -> [[String: Any]] {
     #expect(archive.existingCopy(of: original) != nil)
     #expect(archive.copyPath(for: "/etc/passwd") == nil)
 }
+
+@Test func cursorConversationsAreReadFromItsDatabaseReadOnly() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-cursor-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let dbPath = CursorParser.databasePath(home: home)
+    try FileManager.default.createDirectory(atPath: (dbPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    do {
+        let db = try SQLiteDatabase(path: dbPath)
+        try db.execute("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+        let composer = #"{"composerId":"c1","name":"Fix login","createdAt":1700000000000,"lastUpdatedAt":1700000600000,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]}"#
+        try db.query("INSERT INTO cursorDiskKV VALUES (?, ?)", [.text("composerData:c1"), .text(composer)])
+        try db.query("INSERT INTO cursorDiskKV VALUES (?, ?)", [.text("bubbleId:c1:b1"), .text(#"{"type":1,"text":"The OAuth callback fails"}"#)])
+        try db.query("INSERT INTO cursorDiskKV VALUES (?, ?)", [.text("bubbleId:c1:b2"), .text(#"{"type":2,"text":"Fixed the redirect URI."}"#)])
+        try db.query("INSERT INTO cursorDiskKV VALUES (?, ?)", [.text("cursorAuth/accessToken"), .text("secret")])
+        try db.query("INSERT INTO cursorDiskKV VALUES (?, ?)", [.text("composerData:empty"), .text(#"{"fullConversationHeadersOnly":[]}"#)])
+    }
+    let cands = CursorParser.candidates(home: home)
+    #expect(cands.count == 1 && cands[0].messageCount == 2)
+    let s = try #require(CursorParser.parse(path: cands[0].path))
+    #expect(s.agent == .cursor && s.title == "Fix login" && s.messageCount == 2)
+    #expect(s.texts.map(\.text) == ["The OAuth callback fails", "Fixed the redirect URI."])
+    #expect(!s.texts.contains { $0.text.contains("secret") })
+    #expect(CursorParser.transcript(path: cands[0].path).map(\.kind) == [.user, .assistant])
+    // Read-only means read-only.
+    #expect(throws: (any Error).self) { try SQLiteDatabase(readOnly: dbPath).execute("DELETE FROM cursorDiskKV") }
+}

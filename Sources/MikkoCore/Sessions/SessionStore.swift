@@ -23,7 +23,10 @@ public struct SessionRow: Sendable, Identifiable, Hashable {
     public var note: String?
 
     public var duration: TimeInterval { max(ended.timeIntervalSince(started), 0) }
-    public var originalExists: Bool { FileManager.default.fileExists(atPath: path) }
+    public var originalExists: Bool {
+        // A Cursor session lives inside Cursor's database: it exists while that file does.
+        FileManager.default.fileExists(atPath: CursorParser.split(path)?.database ?? path)
+    }
     /// The agent deleted the original but mikko kept a copy (S-6).
     public var readsFromCopy: Bool { !originalExists && SessionArchive().existingCopy(of: path) != nil }
 }
@@ -306,6 +309,10 @@ public struct SessionIndexer: Sendable {
                 if let st = Self.stat(path) { out.append(Candidate(path: path, agent: .codex, subagents: [], size: st.size, mtime: st.mtime)) }
             }
         }
+        // Cursor: one candidate per conversation; "size" is its message count, "mtime" its last update.
+        for c in CursorParser.candidates(home: home) {
+            out.append(Candidate(path: c.path, agent: .cursor, subagents: [], size: c.messageCount, mtime: c.updated))
+        }
         return out
     }
 
@@ -334,10 +341,15 @@ public struct SessionIndexer: Sendable {
             return k.size != c.size || abs(k.mtime - c.mtime) > 0.5
         }
         var summary = Summary(found: candidates.count, unchanged: candidates.count - todo.count)
+        let cursorFolders = todo.contains { $0.agent == .cursor } ? CursorParser.workspaceFolders(home: home) : [:]
         for (i, c) in todo.enumerated() {
             if Task.isCancelled { break }
             progress?(i, todo.count)
-            let parsed = c.agent == .claudeCode ? ClaudeParser.parse(path: c.path, subagentPaths: c.subagents) : CodexParser.parse(path: c.path)
+            let parsed: ParsedSession? = switch c.agent {
+            case .claudeCode: ClaudeParser.parse(path: c.path, subagentPaths: c.subagents)
+            case .codex: CodexParser.parse(path: c.path)
+            case .cursor: CursorParser.parse(path: c.path, folders: cursorFolders)
+            }
             if let parsed, (try? app.upsert(parsed, fileSize: c.size, fileMTime: c.mtime)) != nil { summary.indexed += 1 } else { summary.failed += 1 }
         }
         progress?(todo.count, todo.count)
@@ -362,6 +374,8 @@ public enum SessionActions {
         // The id comes from a file name or file content, so it is quoted like any other outside text.
         case .claudeCode: return "\(cd)claude --resume \(shellQuote(s.sessionID))"
         case .codex: return "\(cd)codex resume \(shellQuote(s.sessionID))"
+        // Cursor has no resume command: open the project; the conversation is in its history.
+        case .cursor: return "\(cd)cursor ."
         }
     }
 
@@ -376,6 +390,7 @@ public enum SessionActions {
     }
 
     public static func transcript(_ s: SessionRow) -> [TranscriptEntry] {
+        if s.agent == .cursor { return CursorParser.transcript(path: s.path) }
         guard let path = readablePath(s) else { return [] }
         return s.agent == .claudeCode ? ClaudeParser.transcript(path: path) : CodexParser.transcript(path: path)
     }

@@ -42,6 +42,19 @@ public final class SQLiteDatabase: @unchecked Sendable {
         try execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
     }
 
+    /// Opens another app's database strictly read-only: no create, no journal-mode change, no writes.
+    public init(readOnly path: String) throws {
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
+            let err = lastError()
+            sqlite3_close(handle)
+            handle = nil
+            throw err
+        }
+        sqlite3_busy_timeout(handle, 3000)
+        try execute("PRAGMA query_only=ON;")
+    }
+
     public static func inMemory() throws -> SQLiteDatabase { try SQLiteDatabase(path: ":memory:") }
 
     deinit { sqlite3_close(handle) }

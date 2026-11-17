@@ -1,8 +1,14 @@
 import Foundation
 
 public enum AgentTool: String, Sendable, Codable, CaseIterable {
-    case claudeCode, codex
-    public var displayName: String { self == .claudeCode ? "Claude Code" : "Codex" }
+    case claudeCode, codex, cursor
+    public var displayName: String {
+        switch self {
+        case .claudeCode: "Claude Code"
+        case .codex: "Codex"
+        case .cursor: "Cursor"
+        }
+    }
 }
 
 /// Token counts for one model. Cache fields are separate because they are priced differently.
