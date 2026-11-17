@@ -4,6 +4,8 @@ import SwiftUI
 struct SimulatorsView: View {
     @Environment(AppModel.self) private var app
     @State private var confirm: Confirmation?
+    /// Multi-select (⌘-click, ⇧-click) across simulators, OS versions, emulators and system images.
+    @State private var selection = Set<String>()
 
     struct Confirmation: Identifiable {
         let id = UUID()
@@ -16,7 +18,7 @@ struct SimulatorsView: View {
     private var model: SimulatorsModel { app.simulatorsModel }
 
     var body: some View {
-        List {
+        List(selection: $selection) {
             Section {
                 Headline(title: headline, subtitle: "Shut-down simulators use no memory, only disk space.")
                     .listRowSeparator(.hidden).padding(.vertical, 6)
@@ -26,33 +28,33 @@ struct SimulatorsView: View {
             }
             let booted = model.devices.filter(\.isBooted)
             if !booted.isEmpty {
-                Section("Running now") { ForEach(booted) { deviceRow($0) } }
+                Section("Running now") { ForEach(booted) { deviceRow($0).tag(SimulatorsModel.tag(sim: $0)) } }
             }
             let runningAVDs = model.avds.filter(\.isRunning)
             if !runningAVDs.isEmpty {
-                Section("Android emulators running") { ForEach(runningAVDs) { avdRow($0) } }
+                Section("Android emulators running") { ForEach(runningAVDs) { avdRow($0).tag(SimulatorsModel.tag(avd: $0)) } }
             }
             Section("On disk") {
                 let off = model.devices.filter { !$0.isBooted }
                 if !off.isEmpty {
                     DisclosureGroup {
-                        ForEach(off) { deviceRow($0) }
+                        ForEach(off) { deviceRow($0).tag(SimulatorsModel.tag(sim: $0)) }
                     } label: { foldLabel("Shut-down simulators", count: off.count, bytes: off.reduce(0) { $0 + $1.dataBytes }) }
                 }
                 if !model.runtimes.isEmpty {
                     DisclosureGroup {
-                        ForEach(model.runtimes) { runtimeRow($0) }
+                        ForEach(model.runtimes) { runtimeRow($0).tag(SimulatorsModel.tag(runtime: $0)) }
                     } label: { foldLabel("Installed OS versions", count: model.runtimes.count, bytes: model.runtimes.reduce(0) { $0 + $1.sizeBytes }) }
                 }
                 let stopped = model.avds.filter { !$0.isRunning }
                 if !stopped.isEmpty {
                     DisclosureGroup {
-                        ForEach(stopped) { avdRow($0) }
+                        ForEach(stopped) { avdRow($0).tag(SimulatorsModel.tag(avd: $0)) }
                     } label: { foldLabel("Android emulators", count: stopped.count, bytes: stopped.reduce(0) { $0 + $1.bytes }) }
                 }
                 if !model.images.isEmpty {
                     DisclosureGroup {
-                        ForEach(model.images) { imageRow($0) }
+                        ForEach(model.images) { imageRow($0).tag(SimulatorsModel.tag(image: $0)) }
                     } label: { foldLabel("Android system images", count: model.images.count, bytes: model.images.reduce(0) { $0 + $1.bytes }) }
                 }
             }
@@ -62,6 +64,16 @@ struct SimulatorsView: View {
         }
         .listStyle(.inset)
         .overlay { if model.isLoading, model.devices.isEmpty, model.avds.isEmpty { ProgressView() } }
+        .safeAreaInset(edge: .bottom) {
+            if !selection.isEmpty { selectionBar }
+        }
+        .onChange(of: model.isLoading) { _, loading in
+            // Drop selections that no longer exist after a refresh.
+            guard !loading else { return }
+            let live = Set(model.devices.map(SimulatorsModel.tag(sim:)) + model.avds.map(SimulatorsModel.tag(avd:))
+                           + model.runtimes.map(SimulatorsModel.tag(runtime:)) + model.images.map(SimulatorsModel.tag(image:)))
+            selection.formIntersection(live)
+        }
         .toolbar {
             ToolbarItemGroup {
                 Menu {
@@ -82,6 +94,30 @@ struct SimulatorsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { c in Text(c.message) }
         .onAppear { model.refresh() }
+    }
+
+    /// Shown while rows are selected: one line, one action.
+    private var selectionBar: some View {
+        HStack(spacing: 12) {
+            Text("\(selection.count) selected · \(ByteFormat.string(model.bytes(of: selection)))").monospacedDigit()
+            Spacer()
+            Button("Deselect") { selection.removeAll() }
+            if model.busy.contains("selection") { ProgressView().controlSize(.small) }
+            else {
+                Button("Remove \(selection.count)…", role: .destructive) {
+                    let names = model.names(of: selection)
+                    let ids = selection
+                    confirm = Confirmation(
+                        title: "Remove \(ids.count) item\(ids.count == 1 ? "" : "s")?",
+                        message: names.prefix(10).joined(separator: ", ") + (names.count > 10 ? " and \(names.count - 10) more" : "")
+                            + ". Android emulators and system images go to the Trash. Simulators and OS versions are removed by Xcode's own tool and their data is gone. Anything running or still in use is skipped.",
+                        button: "Remove \(ids.count)") { model.removeSelected(ids); selection.removeAll() }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
     }
 
     private var headline: String {
@@ -130,8 +166,13 @@ struct SimulatorsView: View {
             if model.busy.contains(d.udid) { ProgressView().controlSize(.small).frame(width: 90) }
             else if d.isBooted { Button("Shut Down") { model.shutdown(d) }.frame(width: 90) }
             else { Button("Boot") { model.boot(d) }.controlSize(.small).buttonStyle(.borderless).frame(width: 90, alignment: .trailing).disabled(!d.isAvailable) }
+            moreMenu("More actions for \(d.name)") { deviceActions(d) }
         }
-        .contextMenu {
+        .contextMenu { deviceActions(d) }
+    }
+
+    /// The same actions as a visible "⋯" button and as the right-click menu: nothing is hidden.
+    @ViewBuilder private func deviceActions(_ d: SimDevice) -> some View {
             if let path = d.dataPath { Button("Reveal Data Folder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path) } }
             Button("Clear Caches…") {
                 let bytes = d.dataPath.map { SimCaches.bytes(dataPath: $0) } ?? 0
@@ -150,7 +191,6 @@ struct SimulatorsView: View {
                 confirm = Confirmation(title: "Delete \(d.name)?", message: "The simulator and everything on it is removed. You can create it again in Xcode, but its data is gone.",
                                        button: "Delete") { model.delete(d) }
             }
-        }
     }
 
     private func runtimeRow(_ r: SimRuntime) -> some View {
@@ -189,8 +229,12 @@ struct SimulatorsView: View {
             if model.busy.contains(a.name) { ProgressView().controlSize(.small).frame(width: 90) }
             else if a.isRunning { Button("Stop") { model.stop(a) }.frame(width: 90) }
             else { Color.clear.frame(width: 90, height: 1) }
+            moreMenu("More actions for \(a.displayName)") { avdActions(a) }
         }
-        .contextMenu {
+        .contextMenu { avdActions(a) }
+    }
+
+    @ViewBuilder private func avdActions(_ a: AndroidAVD) -> some View {
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a.path)]) }
             Button("Wipe Data…") {
                 confirm = Confirmation(title: "Wipe \(a.displayName)?", message: "Apps and data on the emulator are moved to the Trash; it starts clean next time.", button: "Wipe Data") { model.wipe(a) }
@@ -200,7 +244,13 @@ struct SimulatorsView: View {
                 confirm = Confirmation(title: "Delete \(a.displayName)?", message: "The emulator is moved to the Trash.", button: "Delete") { model.delete(a) }
             }
             .disabled(a.isRunning)
-        }
+    }
+
+    /// A visible "⋯" menu at the end of a row, so actions are never right-click only.
+    private func moreMenu<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+        Menu { content() } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel(label).help(label)
     }
 
     private func imageRow(_ i: AndroidSystemImage) -> some View {

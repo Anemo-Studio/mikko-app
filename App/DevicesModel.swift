@@ -100,6 +100,72 @@ final class SimulatorsModel {
         }
     }
 
+    /// Removes several selected rows in one go: emulators and simulators first, then OS versions,
+    /// then system images, so an image freed by deleting its emulators can go in the same pass.
+    /// Anything running or still in use is skipped and named.
+    func removeSelected(_ ids: Set<String>) {
+        let sims = devices.filter { ids.contains(Self.tag(sim: $0)) }
+        let avdsSel = avds.filter { ids.contains(Self.tag(avd: $0)) }
+        let rts = runtimes.filter { ids.contains(Self.tag(runtime: $0)) }
+        let imgPaths = Set(images.filter { ids.contains(Self.tag(image: $0)) }.map(\.path))
+        guard !sims.isEmpty || !avdsSel.isEmpty || !rts.isEmpty || !imgPaths.isEmpty else { return }
+        busy.insert("selection")
+        Task {
+            let skipped = await Task.detached(priority: .userInitiated) { () -> [String] in
+                var skipped: [String] = []
+                for d in sims {
+                    if d.isBooted { skipped.append("\(d.name) (running)"); continue }
+                    if !Simctl.delete(d) { skipped.append("\(d.name) (simctl refused)") }
+                }
+                for a in avdsSel {
+                    guard a.path.hasSuffix(".avd"), a.iniPath.hasSuffix(".ini"), !AndroidEmulators.isRunning(avdName: a.name) else {
+                        skipped.append("\(a.displayName) (running)"); continue
+                    }
+                    let ok = (try? FileManager.default.trashItem(at: URL(fileURLWithPath: a.path), resultingItemURL: nil)) != nil
+                        && (try? FileManager.default.trashItem(at: URL(fileURLWithPath: a.iniPath), resultingItemURL: nil)) != nil
+                    if !ok { skipped.append("\(a.displayName) (could not move to Trash)") }
+                }
+                for r in rts {
+                    if !r.deletable || !Simctl.deleteRuntime(r) { skipped.append("\(r.name) (cannot be removed)") }
+                }
+                if !imgPaths.isEmpty {
+                    // Usage is re-read now, after the emulators above are gone.
+                    let current = AndroidEmulators.systemImages(sdk: AndroidEmulators.sdkRoot(), avds: AndroidEmulators.list(runningAVDs: []))
+                    for i in current where imgPaths.contains(i.path) {
+                        guard i.path.contains("/system-images/"), i.usedByAVDs == 0 else { skipped.append("\(i.name) (an emulator still uses it)"); continue }
+                        if (try? FileManager.default.trashItem(at: URL(fileURLWithPath: i.path), resultingItemURL: nil)) == nil {
+                            skipped.append("\(i.name) (could not move to Trash)")
+                        }
+                    }
+                }
+                return skipped
+            }.value
+            busy.remove("selection")
+            message = skipped.isEmpty ? nil : "Not removed: " + skipped.joined(separator: ", ") + "."
+            refresh()
+        }
+    }
+
+    static func tag(sim d: SimDevice) -> String { "sim:\(d.udid)" }
+    static func tag(avd a: AndroidAVD) -> String { "avd:\(a.name)" }
+    static func tag(runtime r: SimRuntime) -> String { "rt:\(r.id)" }
+    static func tag(image i: AndroidSystemImage) -> String { "img:\(i.path)" }
+
+    /// Bytes the selected rows hold on disk.
+    func bytes(of ids: Set<String>) -> Int64 {
+        devices.filter { ids.contains(Self.tag(sim: $0)) }.reduce(0) { $0 + $1.dataBytes }
+            + avds.filter { ids.contains(Self.tag(avd: $0)) }.reduce(0) { $0 + $1.bytes }
+            + runtimes.filter { ids.contains(Self.tag(runtime: $0)) }.reduce(0) { $0 + $1.sizeBytes }
+            + images.filter { ids.contains(Self.tag(image: $0)) }.reduce(0) { $0 + $1.bytes }
+    }
+
+    func names(of ids: Set<String>) -> [String] {
+        devices.filter { ids.contains(Self.tag(sim: $0)) }.map { "\($0.name) (\($0.runtimeName))" }
+            + avds.filter { ids.contains(Self.tag(avd: $0)) }.map(\.displayName)
+            + runtimes.filter { ids.contains(Self.tag(runtime: $0)) }.map(\.name)
+            + images.filter { ids.contains(Self.tag(image: $0)) }.map(\.name)
+    }
+
     func delete(_ image: AndroidSystemImage) {
         perform(image.path, failure: "Could not remove the system image.") {
             guard image.path.contains("/system-images/"), image.usedByAVDs == 0 else { return false }
