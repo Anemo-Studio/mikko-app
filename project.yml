@@ -26,8 +26,8 @@ targets:
       base:
         PRODUCT_NAME: mikko
         PRODUCT_BUNDLE_IDENTIFIER: app.mikko.Mikko
-        MARKETING_VERSION: 0.2.0
-        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: 0.2.1
+        CURRENT_PROJECT_VERSION: 3
         SWIFT_VERSION: "6.0"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         GENERATE_INFOPLIST_FILE: YES
