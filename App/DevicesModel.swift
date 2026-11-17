@@ -46,6 +46,14 @@ final class SimulatorsModel {
     }
 
     func boot(_ d: SimDevice) { perform(d.udid, failure: "Could not boot \(d.name).") { Simctl.boot(d) } }
+    /// Caches of the simulator and its apps go to the Trash; only while it is shut down.
+    func clearCaches(_ d: SimDevice) {
+        guard !d.isBooted, let path = d.dataPath else { return }
+        perform(d.udid, failure: "Could not clear the caches of \(d.name).") {
+            SimCaches.clear(dataPath: path)
+            return true
+        }
+    }
     func shutdown(_ d: SimDevice) { perform(d.udid, failure: "Could not shut down \(d.name).") { Simctl.shutdown(d) } }
     func erase(_ d: SimDevice) { perform(d.udid, failure: "Could not erase \(d.name). Shut it down first.") { Simctl.erase(d) } }
     func delete(_ d: SimDevice) { perform(d.udid, failure: "Could not delete \(d.name).") { Simctl.delete(d) } }

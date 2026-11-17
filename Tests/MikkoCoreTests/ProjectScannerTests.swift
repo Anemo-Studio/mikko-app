@@ -94,3 +94,40 @@ private func make(_ root: URL, _ files: [String]) throws {
     try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: dir.path + "/p/src/deep/a.ts")
     #expect(ProjectScanner.lastSourceChange(root: dir.path + "/p", artifactNames: names)!.timeIntervalSinceNow > -60)
 }
+
+@Test func onlyACleanLinkedWorktreeIsRemovedAndTheMainCheckoutNever() throws {
+    let git = "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
+    guard FileManager.default.fileExists(atPath: git) else { return }
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-wt-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: base) }
+    func sh(_ args: [String], in dir: String) {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: git); p.arguments = ["-C", dir] + args
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        try? p.run(); p.waitUntilExit()
+    }
+    let main = "\(base)/shop", wt = "\(base)/shop-agent"
+    try FileManager.default.createDirectory(atPath: main, withIntermediateDirectories: true)
+    sh(["init", "-q"], in: main)
+    try "x".write(toFile: "\(main)/a.txt", atomically: true, encoding: .utf8)
+    sh(["add", "."], in: main)
+    sh(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], in: main)
+    sh(["worktree", "add", "-q", "-b", "agent", wt], in: main)
+
+    #expect(WorktreeRemover.mainRepository(of: wt) == PathCanon.real(main))
+    #expect(WorktreeRemover.remove(root: main, trash: { _ in }, prune: { _ in true }) == .refused("This is not a linked git worktree."))
+
+    try "dirty".write(toFile: "\(wt)/new.txt", atomically: true, encoding: .utf8)
+    if case .removed = WorktreeRemover.remove(root: wt, trash: { _ in }, prune: { _ in true }) { Issue.record("removed a dirty worktree") }
+
+    try FileManager.default.removeItem(atPath: "\(wt)/new.txt")
+    let trashed = Box2()
+    let outcome = WorktreeRemover.remove(root: wt, trash: { trashed.set($0.path) }, prune: { _ in true })
+    #expect(outcome == .removed(mainRepository: PathCanon.real(main)!))
+    #expect(trashed.value == PathCanon.real(wt))
+}
+
+private final class Box2: @unchecked Sendable {
+    private let lock = NSLock(); private var v: String?
+    func set(_ s: String) { lock.lock(); v = s; lock.unlock() }
+    var value: String? { lock.lock(); defer { lock.unlock() }; return v }
+}

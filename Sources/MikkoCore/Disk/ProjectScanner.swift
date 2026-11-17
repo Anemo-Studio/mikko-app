@@ -215,7 +215,7 @@ public enum GitInfo {
     }
 
     /// Runs git read-only: no index refresh, no repo-configured fsmonitor command, bounded time.
-    static func run(_ args: [String], root: String, timeout: TimeInterval = 5) -> (status: Int32, output: Data)? {
+    public static func run(_ args: [String], root: String, timeout: TimeInterval = 5) -> (status: Int32, output: Data)? {
         guard let git = gitPath else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: git)

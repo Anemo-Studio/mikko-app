@@ -4,6 +4,7 @@ public struct CleanOutcome: Sendable {
     public struct Failure: Sendable {
         public var item: DiskItem
         public var reason: String
+        public init(item: DiskItem, reason: String) { self.item = item; self.reason = reason }
     }
     public var cleaned: [DiskItem] = []
     public var failures: [Failure] = []
@@ -77,6 +78,17 @@ public struct DiskCleaner: Sendable {
         return nil
     }
 
+    /// The item's extra paths that are still its own: for an Ollama manifest, the blobs no other
+    /// manifest references at this moment. Anything that cannot be confirmed is left alone.
+    func currentlyUniqueExtras(of item: DiskItem) -> [String] {
+        let manifests = "/manifests/"
+        guard let r = item.path.range(of: manifests) else { return [] }
+        let root = String(item.path[..<r.lowerBound])
+        guard let model = OllamaModels.list(root: root).first(where: { $0.manifestPath == item.path }) else { return [] }
+        let stillUnique = Set(model.uniqueBlobs)
+        return item.extraPaths.filter { stillUnique.contains($0) && $0.hasPrefix(root + "/blobs/sha256-") && !PathCanon.isSymlink($0) }
+    }
+
     public func clean(_ items: [DiskItem]) -> CleanOutcome {
         var outcome = CleanOutcome()
         for item in items {
@@ -89,7 +101,10 @@ public struct DiskCleaner: Sendable {
                 continue
             }
             do {
+                // Extra files (an Ollama model's blobs) go only if, right now, nothing else uses them.
+                let extras = item.extraPaths.isEmpty ? [] : currentlyUniqueExtras(of: item)
                 try remove(URL(fileURLWithPath: item.path))
+                for e in extras { try? remove(URL(fileURLWithPath: e)) }
                 outcome.cleaned.append(item)
             } catch {
                 outcome.failures.append(.init(item: item, reason: error.localizedDescription))

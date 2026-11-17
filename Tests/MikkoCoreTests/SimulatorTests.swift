@@ -49,3 +49,24 @@ import Testing
     #expect(AndroidEmulators.isRunning(avdName: "Medium_Phone_API_36", records: [qemu]))
     #expect(!AndroidEmulators.isRunning(avdName: "Other", records: [qemu]))
 }
+
+@Test func simulatorCachesAreTheContentsOfCacheFoldersOnly() throws {
+    let data = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-sim-\(UUID().uuidString)/data").path
+    defer { try? FileManager.default.removeItem(atPath: (data as NSString).deletingLastPathComponent) }
+    let fm = FileManager.default
+    for dir in ["Library/Caches/com.apple.x", "Containers/Data/Application/A1/Library/Caches/img", "Containers/Data/Application/A1/Documents"] {
+        try fm.createDirectory(atPath: "\(data)/\(dir)", withIntermediateDirectories: true)
+    }
+    fm.createFile(atPath: "\(data)/Containers/Data/Application/A1/Library/Caches/img/a.bin", contents: Data(count: 50_000))
+    fm.createFile(atPath: "\(data)/Containers/Data/Application/A1/Documents/keep.db", contents: Data(count: 50_000))
+    #expect(SimCaches.folders(dataPath: data).count == 2)
+    let names = SimCacheNames()
+    _ = SimCaches.clear(dataPath: data) { names.add($0.lastPathComponent) }
+    #expect(Set(names.values) == ["com.apple.x", "img"])   // Documents is never touched
+}
+
+private final class SimCacheNames: @unchecked Sendable {
+    private let lock = NSLock(); private var v: [String] = []
+    func add(_ s: String) { lock.lock(); v.append(s); lock.unlock() }
+    var values: [String] { lock.lock(); defer { lock.unlock() }; return v }
+}

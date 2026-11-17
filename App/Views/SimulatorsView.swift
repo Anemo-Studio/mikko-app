@@ -122,6 +122,10 @@ struct SimulatorsView: View {
             }
             .help(d.lastUsed.map { "Last used \($0.formatted(.relative(presentation: .named)))" } ?? "Never used")
             Spacer()
+            if d.isBooted, let mem = app.runningModel.items.first(where: { $0.kind == .simulator && $0.externalID == d.udid })?.memory {
+                Text("\(ByteFormat.string(Int64(mem))) memory").monospacedDigit().foregroundStyle(.secondary)
+                    .help("Memory used by this simulator and the apps running in it")
+            }
             Text(ByteFormat.string(d.dataBytes)).monospacedDigit().foregroundStyle(.secondary)
             if model.busy.contains(d.udid) { ProgressView().controlSize(.small).frame(width: 90) }
             else if d.isBooted { Button("Shut Down") { model.shutdown(d) }.frame(width: 90) }
@@ -129,6 +133,14 @@ struct SimulatorsView: View {
         }
         .contextMenu {
             if let path = d.dataPath { Button("Reveal Data Folder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path) } }
+            Button("Clear Caches…") {
+                let bytes = d.dataPath.map { SimCaches.bytes(dataPath: $0) } ?? 0
+                confirm = Confirmation(title: "Clear the caches of \(d.name)?",
+                                       message: bytes > 0 ? "\(ByteFormat.string(bytes)) of caches from the simulator and its apps move to the Trash. Installed apps and their documents stay."
+                                                          : "There are no caches to clear right now.",
+                                       button: "Move to Trash") { model.clearCaches(d) }
+            }
+            .disabled(d.isBooted || d.dataPath == nil)
             Button("Erase Content…") {
                 confirm = Confirmation(title: "Erase \(d.name)?", message: "Installed apps and their data are removed and the simulator returns to a clean state. This cannot be undone.",
                                        button: "Erase") { model.erase(d) }

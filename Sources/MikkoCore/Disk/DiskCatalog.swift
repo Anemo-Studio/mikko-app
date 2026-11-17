@@ -7,6 +7,8 @@ public struct DiskLocation: Sendable, Hashable {
         case whole
         /// Each entry `depth` levels below is its own item (1 = direct children).
         case children(depth: Int)
+        /// `~/.ollama/models`: one item per model — its manifest plus the blobs only it uses.
+        case ollamaModels
     }
     public var path: String
     public var mode: Mode
@@ -145,7 +147,7 @@ public enum DiskCatalog {
                          blockedBy: claudeApps),
             DiskCategory(id: "models.local", group: "Local models", title: "Ollama, LM Studio and Hugging Face models",
                          risk: .caution, whatYouLose: "Each model must be downloaded again — often several GB.",
-                         locations: [DiskLocation("\(home)/.ollama/models"),
+                         locations: [DiskLocation("\(home)/.ollama/models", .ollamaModels),
                                      DiskLocation("\(home)/.lmstudio/models", .children(depth: 2)),
                                      DiskLocation("\(home)/.cache/huggingface/hub", .children(depth: 1))]),
         ]

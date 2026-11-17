@@ -23,15 +23,19 @@ struct DiskView: View {
                     header
                     if let clean = model.lastClean { cleanBanner(clean).padding(.top, 10) }
                     ForEach(RiskLevel.allCases, id: \.self) { level in
-                        let group = model.results.filter { $0.category.risk == level }
+                        let group = model.visibleResults.filter { $0.category.risk == level }
                         if !group.isEmpty {
                             GroupLabel(text: groupTitle(level), trailing: ByteFormat.string(group.reduce(0) { $0 + $1.bytes }))
                             rows { ForEach(group) { CategoryRow(result: $0, isLast: $0.id == group.last?.id) } }
                         }
                     }
-                    if !model.projects.isEmpty {
-                        GroupLabel(text: "Old project leftovers", trailing: ByteFormat.string(model.projects.reduce(0) { $0 + $1.bytes }))
-                        rows { ForEach(model.projects) { ProjectRow(project: $0, isLast: $0.id == model.projects.last?.id) } }
+                    if model.onlyOld, model.visibleResults.isEmpty, model.visibleProjects.isEmpty, !model.isScanning {
+                        Text("Nothing here has gone untouched for \(DiskModel.oldDays) days.").foregroundStyle(.secondary).card()
+                    }
+                    let projects = model.visibleProjects
+                    if !projects.isEmpty {
+                        GroupLabel(text: "Old project leftovers", trailing: ByteFormat.string(projects.reduce(0) { $0 + $1.bytes }))
+                        rows { ForEach(projects) { ProjectRow(project: $0, isLast: $0.id == projects.last?.id) } }
                     } else if model.projectFolders.isEmpty, !model.isScanning {
                         GroupLabel(text: "Old project leftovers")
                         HStack {
@@ -50,6 +54,7 @@ struct DiskView: View {
         .toolbar {
             Menu {
                 Button("Rescan") { model.scan() }.disabled(model.isScanning)
+                Toggle("Only Untouched for \(DiskModel.oldDays)+ Days", isOn: Binding(get: { model.onlyOld }, set: { model.onlyOld = $0 }))
                 Button("History…") { showHistory = true }
                 Divider()
                 ForEach(model.projectFolders, id: \.self) { folder in
@@ -251,6 +256,11 @@ private struct ProjectRow: View {
     @Environment(AppModel.self) private var app
     let project: ProjectArtifacts
     let isLast: Bool
+    @State private var confirmingRemoval = false
+
+    private var canRemoveWorktree: Bool {
+        project.isWorktree && project.hasUncommittedChanges == false && !app.diskModel.isBusy(project)
+    }
 
     var body: some View {
         ExpandableRow(items: project.artifacts, title: project.name, note: note, warning: warning, bytes: project.bytes, isLast: isLast) {
@@ -258,7 +268,16 @@ private struct ProjectRow: View {
         }
         .contextMenu {
             Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: project.root) }
+            if canRemoveWorktree {
+                Button("Remove Worktree…") { confirmingRemoval = true }
+            }
             Button("Never Clean This Project") { app.diskModel.neverClean(path: project.root) }
+        }
+        .confirmationDialog("Remove the worktree \(project.name)?", isPresented: $confirmingRemoval) {
+            Button("Move to Trash", role: .destructive) { app.diskModel.removeWorktree(project) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The folder goes to the Trash. Its branch\(project.branch.map { " \($0)" } ?? "") and every commit stay in the main repository. It has no uncommitted changes.")
         }
     }
 

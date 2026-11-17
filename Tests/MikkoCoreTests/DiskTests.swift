@@ -140,3 +140,42 @@ private final class Box: @unchecked Sendable {
     func add(_ s: String) { lock.lock(); storage.append(s); lock.unlock() }
     var values: [String] { lock.lock(); defer { lock.unlock() }; return storage }
 }
+
+@Test func ollamaModelsAreRowsAndSharedBlobsAreNeverRemoved() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-ollama-\(UUID().uuidString)/models").path
+    defer { try? FileManager.default.removeItem(atPath: (root as NSString).deletingLastPathComponent) }
+    let fm = FileManager.default
+    try fm.createDirectory(atPath: "\(root)/blobs", withIntermediateDirectories: true)
+    func blob(_ c: Character, _ size: Int) -> String {
+        let hex = String(repeating: c, count: 64)
+        fm.createFile(atPath: "\(root)/blobs/sha256-\(hex)", contents: Data(count: size))
+        return "sha256:\(hex)"
+    }
+    let base = blob("a", 40_000), small = blob("b", 8_000), other = blob("c", 8_000)
+    func manifest(_ rel: String, _ layers: [String]) throws {
+        let path = "\(root)/manifests/registry.ollama.ai/\(rel)"
+        try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let json: [String: Any] = ["layers": layers.map { ["digest": $0] }]
+        fm.createFile(atPath: path, contents: try JSONSerialization.data(withJSONObject: json))
+    }
+    try manifest("library/llama3.2/latest", [base, small])
+    try manifest("me/coder/7b", [base, other])
+
+    let models = OllamaModels.list(root: root)
+    #expect(Set(models.map(\.name)) == ["llama3.2:latest", "me/coder:7b"])
+    let llama = try #require(models.first { $0.name == "llama3.2:latest" })
+    #expect(llama.uniqueBlobs == ["\(root)/blobs/sha256-\(String(repeating: "b", count: 64))"])
+    #expect(llama.sharedBytes > 0)
+
+    let category = DiskCategory(id: "models.local", group: "Local models", title: "Models", risk: .caution, whatYouLose: "x",
+                                locations: [DiskLocation(root, .ollamaModels)])
+    let item = try #require(DiskScanner().scan(category).items.first { $0.name.hasSuffix("llama3.2:latest") })
+    let box = Box()
+    let cleaner = DiskCleaner(allowedPaths: Set(DiskScanner().itemPaths(for: category.locations[0])), remove: { box.add($0.path) })
+    let outcome = cleaner.clean([item])
+    let removed = box.values
+    #expect(outcome.cleaned.count == 1)
+    #expect(removed.contains(llama.manifestPath))
+    #expect(removed.contains { $0.hasSuffix(String(repeating: "b", count: 64)) })
+    #expect(!removed.contains { $0.hasSuffix(String(repeating: "a", count: 64)) }) // shared base stays
+}

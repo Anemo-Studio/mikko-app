@@ -10,11 +10,14 @@ public struct DiskItem: Sendable, Identifiable, Hashable {
     public var risk: RiskLevel
     /// Optional extra context, e.g. what kind of artifact this is.
     public var detail: String?
+    /// Files that belong to this item besides `path` (an Ollama model's own blobs). Re-checked
+    /// at clean time; never anything shared with another item.
+    public var extraPaths: [String] = []
 
     public init(categoryID: String, name: String, path: String, bytes: Int64, modified: Date?,
-                risk: RiskLevel, detail: String? = nil) {
+                risk: RiskLevel, detail: String? = nil, extraPaths: [String] = []) {
         self.categoryID = categoryID; self.name = name; self.path = path; self.bytes = bytes
-        self.modified = modified; self.risk = risk; self.detail = detail
+        self.modified = modified; self.risk = risk; self.detail = detail; self.extraPaths = extraPaths
     }
 }
 
@@ -81,12 +84,25 @@ public struct DiskScanner: Sendable {
                 }
             }
             return level
+        case .ollamaModels:
+            return OllamaModels.list(root: location.path).map(\.manifestPath)
         }
     }
 
     public func scan(_ category: DiskCategory) -> DiskCategoryResult {
         var items: [DiskItem] = []
         for location in category.locations {
+            if case .ollamaModels = location.mode {
+                for m in OllamaModels.list(root: location.path) where !exclusions.excludes(path: m.manifestPath) {
+                    let bytes = m.uniqueBytes + OllamaModels.size(m.manifestPath)
+                    guard bytes > 0 else { continue }
+                    items.append(DiskItem(categoryID: category.id, name: "Ollama — \(m.name)", path: m.manifestPath, bytes: bytes,
+                                          modified: m.modified, risk: category.risk,
+                                          detail: m.sharedBytes > 0 ? "Another \(ByteFormat.string(m.sharedBytes)) is shared with other models and stays." : nil,
+                                          extraPaths: m.uniqueBlobs))
+                }
+                continue
+            }
             for path in itemPaths(for: location, in: category) {
                 if Task.isCancelled { break }
                 let url = URL(fileURLWithPath: path)
@@ -128,7 +144,7 @@ public struct DiskScanner: Sendable {
     static func displayName(_ path: String, location: DiskLocation) -> String {
         let home = NSHomeDirectory()
         switch location.mode {
-        case .whole:
+        case .whole, .ollamaModels:
             return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
         case .children:
             let rel = path.dropFirst(location.path.count).drop { $0 == "/" }

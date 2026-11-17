@@ -54,6 +54,37 @@ final class DiskModel {
         if let data = try? JSONEncoder().encode(exclusions) { UserDefaults.standard.set(data, forKey: "exclusions") }
     }
 
+    // MARK: Age filter
+
+    static let oldDays = 60
+    /// Show only what has not changed for 60+ days. Turning it on deselects whatever it hides,
+    /// so a clean never touches rows the person cannot see.
+    var onlyOld = UserDefaults.standard.bool(forKey: "diskOnlyOld") {
+        didSet {
+            UserDefaults.standard.set(onlyOld, forKey: "diskOnlyOld")
+            if onlyOld {
+                let visible = Set(visibleResults.flatMap { $0.items.map(\.id) } + visibleProjects.flatMap { $0.artifacts.map(\.id) })
+                deselect(selection.filter { !visible.contains($0) }.map { $0 })
+            }
+        }
+    }
+
+    func isOld(_ date: Date?) -> Bool {
+        guard let date else { return false } // unknown age is never "old"
+        return Date().timeIntervalSince(date) >= Double(Self.oldDays) * 86_400
+    }
+
+    var visibleResults: [DiskCategoryResult] {
+        guard onlyOld else { return results }
+        return results.compactMap { r in
+            var r = r
+            r.items = r.items.filter { isOld($0.modified) }
+            return r.items.isEmpty ? nil : r
+        }
+    }
+
+    var visibleProjects: [ProjectArtifacts] { onlyOld ? projects.filter { isOld($0.lastModified) } : projects }
+
     func categoryTitle(_ id: String) -> String {
         catalog.first { $0.id == id }.map { "\($0.group) — \($0.title)" } ?? id
     }
@@ -118,7 +149,7 @@ final class DiskModel {
             let projects = await found
             if Task.isCancelled { return }
             self.projects = projects
-            for p in projects where preselects(p) {
+            for p in projects where preselects(p) && (!onlyOld || isOld(p.lastModified)) {
                 for a in p.artifacts where risk(of: a).selectedByDefault && !userDeselected.contains(a.id) {
                     selection.insert(a.id)
                 }
@@ -137,7 +168,7 @@ final class DiskModel {
         let idx = results.firstIndex { $0.bytes < result.bytes } ?? results.endIndex
         results.insert(result, at: idx)
         if result.category.risk.selectedByDefault, blocker(for: result.category) == nil {
-            selection.formUnion(result.items.map(\.id).filter { !userDeselected.contains($0) })
+            selection.formUnion(result.items.filter { !onlyOld || isOld($0.modified) }.map(\.id).filter { !userDeselected.contains($0) })
         }
     }
 
@@ -238,6 +269,23 @@ final class DiskModel {
             lastClean = CleanSummary(bytesMoved: outcome.bytesMoved, count: outcome.cleaned.count,
                                      failures: outcome.failures, blocked: blocked)
             isCleaning = false
+        }
+    }
+
+    /// D-4: a finished, clean agent worktree goes to the Trash as a whole; its branch stays in the main repo.
+    func removeWorktree(_ project: ProjectArtifacts) {
+        guard project.isWorktree, project.hasUncommittedChanges == false, !isBusy(project) else { return }
+        let root = project.root
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { WorktreeRemover.remove(root: root) }.value
+            switch outcome {
+            case .removed:
+                projects.removeAll { $0.root == root }
+                lastClean = CleanSummary(bytesMoved: project.bytes, count: 1, failures: [])
+            case .refused(let reason):
+                let item = DiskItem(categoryID: ProjectScanner.categoryID, name: project.name, path: root, bytes: 0, modified: nil, risk: .risky)
+                lastClean = CleanSummary(bytesMoved: 0, count: 0, failures: [.init(item: item, reason: reason)])
+            }
         }
     }
 
