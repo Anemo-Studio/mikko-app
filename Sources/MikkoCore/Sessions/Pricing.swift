@@ -29,7 +29,7 @@ public enum Pricing {
         ("sonnet-4-6", .init(input: 3, output: 15, cacheRead: 0.30, cacheWrite5m: 3.75, cacheWrite1h: 6)),
         ("sonnet-4-5", .init(input: 3, output: 15, cacheRead: 0.30, cacheWrite5m: 3.75, cacheWrite1h: 6)),
         ("sonnet-4", .init(input: 3, output: 15, cacheRead: 0.30, cacheWrite5m: 3.75, cacheWrite1h: 6)),
-        // Haiku 5.5 has a higher tier above 100k prompt tokens; the lower tier is used here.
+        // Haiku 5.5: prompts up to 100k tokens. Longer prompts are tagged by `billingModel` and priced below.
         ("haiku-5-5", .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite5m: 0.125, cacheWrite1h: 0.20)),
         ("haiku-4-5", .init(input: 1, output: 5, cacheRead: 0.10, cacheWrite5m: 1.25, cacheWrite1h: 2)),
         ("gpt-5.6-sol", .init(input: 4, output: 20, cacheRead: 0.40, cacheWrite5m: 0, cacheWrite1h: 0)),
@@ -47,8 +47,35 @@ public enum Pricing {
     /// suffix. Anything else ("-mini", "-fast", a newer version digit) is a different, unknown model.
     nonisolated(unsafe) static let allowedSuffix = try! NSRegularExpression(pattern: #"^(-codex(-max)?)?(-\d{8})?(@\d{8})?(\[.*\])?$"#)
 
+    /// Models priced higher when one request's prompt passes a threshold: (match, prompt tokens, price above it).
+    static let longPromptTiers: [(match: String, threshold: Int64, price: ModelPrice)] = [
+        ("haiku-5-5", 100_000, .init(input: 0.50, output: 2.50, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1.0)),
+    ]
+    static let longPromptTag = "[over-threshold]"
+
+    /// The name a request is accounted under. A long prompt on a tiered model gets a tag, so the
+    /// higher price applies to that request only — tiers are per request, never per session.
+    public static func billingModel(_ model: String, _ u: TokenUsage) -> String {
+        let prompt = u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h
+        let m = model.lowercased()
+        guard let tier = longPromptTiers.first(where: { m.contains($0.match) }), prompt > tier.threshold else { return model }
+        return model + longPromptTag
+    }
+
+    /// "claude-haiku-5-5 · prompts over 100k" instead of the internal tag.
+    public static func displayName(_ model: String) -> String {
+        guard model.hasSuffix(longPromptTag) else { return model }
+        let base = String(model.dropLast(longPromptTag.count))
+        let k = longPromptTiers.first { base.lowercased().contains($0.match) }.map { "\($0.threshold / 1000)k" } ?? "the threshold"
+        return "\(base) · prompts over \(k)"
+    }
+
     public static func price(for model: String) -> ModelPrice? {
         let m = model.lowercased()
+        if m.hasSuffix(longPromptTag) {
+            let base = String(m.dropLast(longPromptTag.count))
+            return longPromptTiers.first { base.contains($0.match) }?.price
+        }
         for entry in table {
             guard let r = m.range(of: entry.match) else { continue }
             let rest = String(m[r.upperBound...])

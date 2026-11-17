@@ -18,7 +18,10 @@ struct RunningView: View {
 
     var body: some View {
         let items = showSystem ? model.items : model.visibleItems
-        let main = items.filter { !Self.quietKinds.contains($0.kind) }
+        // Left behind by an agent session that has ended: what mikko exists to catch, so it
+        // comes first and is never folded into a quiet group.
+        let orphans = items.filter(\.isOrphan)
+        let main = items.filter { !Self.quietKinds.contains($0.kind) && !$0.isOrphan }
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 Headline(title: main.isEmpty ? "Nothing left running." : "\(main.count) thing\(main.count == 1 ? "" : "s") running",
@@ -39,6 +42,27 @@ struct RunningView: View {
                         .padding(.top, 10)
                 }
 
+                if !orphans.isEmpty {
+                    HStack(alignment: .firstTextBaseline) {
+                        GroupLabel(text: "Left behind by ended agent sessions",
+                                   trailing: ByteFormat.string(Int64(orphans.reduce(0) { $0 + $1.memory })))
+                        Spacer()
+                        let stoppable = orphans.filter { model.policy.allowsOrphanBatchStop($0) && model.pendingStops[$0.id] == nil }
+                        if stoppable.count > 1 {
+                            Button("Stop All \(stoppable.count)") { model.requestStop(stoppable) }
+                                .controlSize(.small)
+                        }
+                    }
+                    VStack(spacing: 0) {
+                        ForEach(orphans) { item in
+                            RunningRow(item: item, isOpen: openItem == item.id, toggle: { openItem = openItem == item.id ? nil : item.id },
+                                       confirm: { confirming = $0 })
+                            if item.id != orphans.last?.id { Divider().padding(.leading, 44) }
+                        }
+                    }
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: Calm.corner, style: .continuous))
+                }
+
                 ForEach(groups(main), id: \.title) { group in
                     GroupLabel(text: group.title, trailing: ByteFormat.string(Int64(group.items.reduce(0) { $0 + $1.memory })))
                     VStack(spacing: 0) {
@@ -52,7 +76,7 @@ struct RunningView: View {
                 }
 
                 let quiet = RunningKind.allCases.filter { Self.quietKinds.contains($0) }.compactMap { kind -> (RunningKind, [RunningItem])? in
-                    let g = items.filter { $0.kind == kind }
+                    let g = items.filter { $0.kind == kind && !$0.isOrphan }
                     return g.isEmpty ? nil : (kind, g)
                 }
                 if !quiet.isEmpty {
@@ -253,6 +277,13 @@ private struct RunningRow: View {
         return parts.joined(separator: ", ")
     }
 
+    /// The agent session this item came from: its own marker first, then the running agent's session file.
+    private var sessionID: String? {
+        if let id = item.sessionID { return id }
+        if item.kind == .agent { return ClaudeSessionMap.sessionID(for: item.root) }
+        return item.agentProcess.flatMap { ClaudeSessionMap.sessionID(for: $0) }
+    }
+
     /// The single most important thing to know about this row, if any.
     private var statusText: String? {
         if item.isOrphan { return "Left behind" }
@@ -293,6 +324,12 @@ private struct RunningRow: View {
                 }
                 if let dir = item.project?.root ?? item.cwd {
                     Button("Show Folder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir) }
+                }
+                if let session = sessionID {
+                    Button("Open Session") {
+                        if app.sessionsModel.show(sessionID: session) { app.select(.sessions) }
+                        else { model.message = "That session isn't indexed yet. Open Sessions to refresh the list." }
+                    }
                 }
                 Button(model.pinned.contains(item.pinKey) ? "Unpin" : "Pin") { model.togglePin(item) }
                     .help("Pinned items are never stopped in bulk or by agents.")

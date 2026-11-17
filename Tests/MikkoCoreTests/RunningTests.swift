@@ -3,8 +3,9 @@ import Testing
 @testable import MikkoCore
 
 private func rec(_ pid: Int32, _ ppid: Int32, _ name: String, argv: [String] = [], path: String? = nil, cwd: String? = nil,
-                 env: [String: String] = [:], ports: [UInt16] = [], uid: UInt32 = 501, mem: UInt64 = 100, wildcard: Bool = false) -> ProcRecord {
-    ProcRecord(identity: .init(pid: pid, startSec: 1000 + Int64(pid), startUsec: 0), ppid: ppid, uid: uid, name: name,
+                 env: [String: String] = [:], ports: [UInt16] = [], uid: UInt32 = 501, mem: UInt64 = 100, wildcard: Bool = false,
+                 pgid: Int32 = 0) -> ProcRecord {
+    ProcRecord(identity: .init(pid: pid, startSec: 1000 + Int64(pid), startUsec: 0), ppid: ppid, pgid: pgid, uid: uid, name: name,
                path: path ?? "/usr/local/bin/\(name)", argv: argv.isEmpty ? [name] : argv, environment: env, cwd: cwd,
                footprint: mem, listeners: ports.map {
                    Listener(port: $0, address: wildcard ? "0.0.0.0" : "127.0.0.1", isWildcard: wildcard, isLoopback: !wildcard)
@@ -290,4 +291,36 @@ private func item(_ kind: RunningKind, launcher: Launcher = .you, session: Strin
     let i = classifier.classify(snap).first { $0.root.pid == 12 }
     #expect(i?.launcher == .claudeCode && i?.agentProcess == nil && i?.isOrphan == false)
     #expect(!StopPolicy().allowsAgentStop(i!, callerAgentProcess: ProcessIdentity(pid: 99, startSec: 1, startUsec: 0)))
+}
+
+@Test func aDoubleForkedChildStaysPartOfItsTree() {
+    // npm leads its process group; a worker detached by double-forking (no setsid) is
+    // re-parented to launchd but keeps the group, so it belongs to the same item and Stop ends it.
+    let snap = ProcessSnapshot(records: base + [
+        rec(20, 12, "npm", argv: ["npm", "run", "dev"], cwd: "/Users/t/dev/shop", pgid: 20),
+        rec(22, 20, "node", argv: ["node", "server.js"], cwd: "/Users/t/dev/shop", ports: [3000], pgid: 20),
+        rec(30, 1, "node", argv: ["node", "worker.js"], cwd: "/Users/t/dev/shop", ports: [9229], pgid: 20),
+        // A setsid daemon (own group) is not linked back.
+        rec(40, 1, "node", argv: ["node", "other.js"], cwd: "/Users/t/dev/shop", ports: [4000], pgid: 40),
+    ])
+    let items = classifier.classify(snap)
+    let dev = items.first { $0.root.pid == 20 }
+    #expect(dev != nil)
+    #expect(Set(dev?.processes.map(\.pid) ?? []) == [20, 22, 30])
+    #expect(dev?.ports.map(\.port) == [3000, 9229])
+    #expect(!items.contains { $0.root.pid == 30 })
+    #expect(items.contains { $0.root.pid == 40 })
+}
+
+@Test func leftBehindBatchSkipsDatabasesAndPins() {
+    let snap = ProcessSnapshot(records: [rec(1, 0, "launchd", uid: 0),
+        rec(50, 1, "node", argv: ["node", "mcp-server.js"], env: ["CLAUDECODE": "1"], ports: [7000]),
+        rec(60, 1, "postgres", env: ["CLAUDECODE": "1"], ports: [5432])])
+    let items = classifier.classify(snap)
+    let mcp = items.first { $0.root.pid == 50 }, db = items.first { $0.root.pid == 60 }
+    #expect(mcp?.isOrphan == true && db?.isOrphan == true)
+    let policy = StopPolicy(pinned: [])
+    #expect(mcp.map(policy.allowsOrphanBatchStop) == true)
+    #expect(db.map(policy.allowsOrphanBatchStop) == false)
+    #expect(mcp.map { StopPolicy(pinned: [$0.pinKey]).allowsOrphanBatchStop($0) } == false)
 }

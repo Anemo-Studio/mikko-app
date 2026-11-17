@@ -75,3 +75,17 @@ private final class Box2: @unchecked Sendable {
     func add(_ s: String) { lock.lock(); storage.append(s); lock.unlock() }
     var values: [String] { lock.lock(); defer { lock.unlock() }; return storage }
 }
+
+@Test func newerEnginesReportSharedLayersOnce() {
+    let df: [String: Any] = [
+        "LayersSize": 300,
+        "ImageUsage": ["TotalSize": 320],
+        "Images": [["Size": 200, "SharedSize": 120, "Containers": 1, "RepoTags": ["app:1"]],
+                   ["Size": 150, "SharedSize": 120, "Containers": 0, "RepoTags": ["app:old"]]],
+        "BuildCache": [["Size": 40, "InUse": false, "Shared": true], ["Size": 10, "InUse": false, "Shared": false]],
+    ]
+    let u = DockerDiskUsage(df)
+    #expect(u.imagesBytes == 320)          // the engine's total, not 200 + 150
+    #expect(u.unusedImagesBytes == 30)     // only the layers app:old does not share
+    #expect(u.buildCacheBytes == 10)       // shared cache is not freed by a prune
+}

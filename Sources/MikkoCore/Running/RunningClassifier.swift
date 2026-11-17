@@ -162,14 +162,34 @@ public struct RunningClassifier: Sendable {
             return cur
         }
 
+        // A child that double-forks to detach is re-parented to launchd and falls out of the
+        // parent tree, but unless it also called setsid it keeps its process group. Those are
+        // attached back to the group leader, so Stop ends them too. (A setsid daemon has its
+        // own group and cannot be linked back; it stays its own row.)
+        var detached: [Int32: [Int32]] = [:]
+        for r in snapshot.records where r.ppid == 1 && r.uid == uid && r.pgid > 1 && r.pgid != r.pid {
+            detached[r.pgid, default: []].append(r.pid)
+        }
+        func groupLeader(of r: ProcRecord) -> ProcRecord? {
+            guard r.ppid == 1, r.pgid > 1, r.pgid != r.pid, let leader = byPid[r.pgid], leader.uid == uid,
+                  !isBoundary(leader), !Self.shells.contains(leader.name) else { return nil }
+            return leader
+        }
+
         func descendants(of pid: Int32) -> [ProcRecord] {
             var out: [ProcRecord] = []
             var stack = children[pid] ?? []
             var seen: Set<Int32> = [pid]
+            func adopt(_ p: Int32) {
+                guard let r = byPid[p], r.pgid == p, !isBoundary(r), !Self.shells.contains(r.name) else { return }
+                stack.append(contentsOf: detached[p] ?? [])
+            }
+            adopt(pid)
             while let p = stack.popLast() {
                 guard seen.insert(p).inserted, let r = byPid[p] else { continue }
                 out.append(r)
                 stack.append(contentsOf: children[p] ?? [])
+                adopt(p)
             }
             return out
         }
@@ -185,7 +205,8 @@ public struct RunningClassifier: Sendable {
         var rootsSeen = Set<Int32>()
         var items: [RunningItem] = []
         for seed in snapshot.records where isSeed(seed) {
-            let root = AgentKind.detect(seed) != nil ? seed : rootOf(seed)
+            var root = AgentKind.detect(seed) != nil ? seed : rootOf(seed)
+            if let leader = groupLeader(of: root) { root = rootOf(leader) }
             guard rootsSeen.insert(root.pid).inserted else { continue }
             if let item = makeItem(root: root, byPid: byPid, descendants: descendants(of: root.pid)) { items.append(item) }
         }
@@ -308,7 +329,7 @@ public struct RunningClassifier: Sendable {
             processes: tree.map(\.identity),
             memory: tree.reduce(0) { $0 + $1.footprint }, cpuNs: tree.reduce(0) { $0 + $1.cpuNs },
             launcher: launcher, chain: chain,
-            sessionID: tree.lazy.compactMap { $0.environment["CLAUDE_CODE_SESSION_ID"] }.first,
+            sessionID: tree.lazy.compactMap { $0.environment["CLAUDE_CODE_SESSION_ID"] ?? $0.environment["CODEX_THREAD_ID"] }.first,
             isOrphan: orphan, isBuilding: tree.contains { Self.compilers.contains($0.name) },
             isSystem: isSystem && kind == .other, cwd: root.cwd,
             command: root.argv.joined(separator: " "), externalID: externalID, agentProcess: agentProcess)

@@ -21,6 +21,8 @@ public struct AppDatabase: Sendable {
         agentLogMigration,
         // Usage accounting changed (forks, Codex repeats, nested subagents): re-read every transcript once.
         "UPDATE sessions SET file_size = -1;",
+        // Haiku 5.5 long prompts are now priced at their own tier: re-read every transcript once.
+        "UPDATE sessions SET file_size = -1;",
     ]
 
     public init(db: SQLiteDatabase) throws {

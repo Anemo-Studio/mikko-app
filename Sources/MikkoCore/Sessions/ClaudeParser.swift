@@ -148,8 +148,9 @@ public enum ClaudeParser {
         func buckets() -> [UsageBucket] {
             var out: [String: UsageBucket] = [:]
             for v in byRequest.values {
-                let k = "\(v.model)|\(v.day)"
-                out[k, default: UsageBucket(model: v.model, day: v.day, usage: TokenUsage())].usage += v.usage
+                let model = Pricing.billingModel(v.model, v.usage)
+                let k = "\(model)|\(v.day)"
+                out[k, default: UsageBucket(model: model, day: v.day, usage: TokenUsage())].usage += v.usage
             }
             return out.values.sorted { ($0.day, $0.model) < ($1.day, $1.model) }
         }

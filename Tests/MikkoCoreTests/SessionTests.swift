@@ -319,3 +319,26 @@ private func claudeFixture() -> [[String: Any]] {
     #expect(n == 100_000)
     #expect(Date().timeIntervalSince(start) < 2)
 }
+
+@Test func claudeSessionMapChecksTheProcessStartTime() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-sessmap-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let agent = ProcessIdentity(pid: 4242, startSec: 1_700_000_000, startUsec: 0)
+    try #"{"pid":4242,"sessionId":"abc","startedAt":1700000002000}"#.write(to: dir.appendingPathComponent("4242.json"), atomically: true, encoding: .utf8)
+    #expect(ClaudeSessionMap.sessionID(for: agent, directory: dir) == "abc")
+    // Same pid, but the file belongs to a process that started an hour earlier: not ours.
+    let recycled = ProcessIdentity(pid: 4242, startSec: 1_700_003_600, startUsec: 0)
+    #expect(ClaudeSessionMap.sessionID(for: recycled, directory: dir) == nil)
+}
+
+@Test func haiku55LongPromptsUseTheHigherTierPerRequest() {
+    let short = TokenUsage(input: 50_000, output: 1_000)
+    let long = TokenUsage(input: 20_000, output: 1_000, cacheRead: 90_000)
+    #expect(Pricing.billingModel("claude-haiku-5-5", short) == "claude-haiku-5-5")
+    let tagged = Pricing.billingModel("claude-haiku-5-5", long)
+    #expect(tagged != "claude-haiku-5-5")
+    // 20k × $0.50 + 90k × $0.05 + 1k × $2.50 per million
+    #expect(abs((Pricing.cost(model: tagged, usage: long) ?? 0) - 0.017) < 1e-9)
+    #expect(Pricing.billingModel("claude-opus-5-5", long) == "claude-opus-5-5")
+}

@@ -180,6 +180,43 @@ func mcpCommand() async {
     await server.runStdio()
 }
 
+/// C-1, C-2: containers on every engine found, and what they take on disk. Read-only.
+func containersCommand(json: Bool) {
+    let engines = DockerClient.discover()
+    guard !engines.isEmpty else { print("No container engine is running (Docker Desktop, OrbStack, Colima, Rancher or Podman)."); return }
+    var out: [[String: Any]] = []
+    for engine in engines {
+        do {
+            let list = try engine.containers()
+            let df = try? engine.diskUsage()
+            if json {
+                out.append(["engine": engine.runtimeName,
+                            "containers": list.map { ["name": $0.name, "image": $0.image, "running": $0.isRunning, "status": $0.status,
+                                                      "ports": $0.ports.map(Int.init), "compose": $0.composeProject ?? NSNull()] as [String: Any] },
+                            "disk": df.map { ["images": $0.imagesBytes, "unused_images": $0.unusedImagesBytes, "stopped_containers": $0.stoppedContainersBytes,
+                                              "build_cache": $0.buildCacheBytes, "volumes": $0.volumesBytes,
+                                              "unused_volumes": $0.unusedVolumes.map(\.name)] as [String: Any] } ?? NSNull()])
+                continue
+            }
+            print("\(engine.runtimeName) — \(list.filter(\.isRunning).count) running, \(list.filter { !$0.isRunning }.count) stopped")
+            for c in list.sorted(by: { ($0.isRunning ? 0 : 1, $0.name) < ($1.isRunning ? 0 : 1, $1.name) }) {
+                let ports = c.ports.isEmpty ? "" : "  :" + c.ports.map(String.init).joined(separator: ",")
+                print("  \(c.isRunning ? "●" : "○") \(pad(c.name, 34)) \(pad(c.composeProject ?? "", 14)) \(c.status)\(ports)")
+            }
+            if let df {
+                print("  Disk: images \(ByteFormat.string(df.imagesBytes)) (unused \(ByteFormat.string(df.unusedImagesBytes))), " +
+                      "stopped containers \(ByteFormat.string(df.stoppedContainersBytes)), build cache \(ByteFormat.string(df.buildCacheBytes)), " +
+                      "volumes \(ByteFormat.string(df.volumesBytes)) (\(df.unusedVolumes.count) unused)")
+            }
+        } catch {
+            if json { out.append(["engine": engine.runtimeName, "error": "\(error)"]) } else { print("\(engine.runtimeName): \(error)") }
+        }
+    }
+    if json, let data = try? JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]) {
+        print(String(decoding: data, as: UTF8.self))
+    }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "disk":
@@ -192,6 +229,8 @@ case "wait":
     if Ports.wait(for: port, timeout: timeout) { print("Port \(port) is answering.") } else { print("Port \(port) did not answer within \(Int(timeout))s."); exit(1) }
 case "mcp":
     await mcpCommand()
+case "containers":
+    containersCommand(json: args.contains("--json"))
 case "sessions":
     sessionsCommand(Array(args.dropFirst()))
 case "status":
@@ -208,6 +247,7 @@ default:
       mikko stop <port|pid> [--yes] [--force]   stop the whole process tree
       mikko wait <port> [--timeout <s>]         wait until a port answers
       mikko disk   [--json]           reclaimable disk space (read-only)
+      mikko containers [--json]       containers on every engine, and their disk use (read-only)
       mikko mcp                       run as an MCP server for agents (stdio)
       mikko sessions                  recent agent sessions with API-equivalent cost
       mikko sessions search <text>    search every session

@@ -67,6 +67,14 @@ final class SessionsModel {
         }
     }
 
+    /// Selects a session by its agent's session id. False when it is not indexed (yet).
+    @discardableResult
+    func show(sessionID: String) -> Bool {
+        guard let row = rows.first(where: { $0.sessionID == sessionID }) ?? (try? database?.session(id: sessionID)) else { return false }
+        selection = row.path
+        return true
+    }
+
     func open(_ hit: SearchHit) {
         jumpToLine = hit.line
         selection = hit.path

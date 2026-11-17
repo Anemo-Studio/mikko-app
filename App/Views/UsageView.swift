@@ -143,7 +143,7 @@ struct UsageView: View {
             Text(title).font(.headline)
             ForEach(slices.prefix(8)) { s in
                 HStack {
-                    Text(s.key).lineLimit(1).truncationMode(.middle)
+                    Text(Pricing.displayName(s.key)).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Text(count(s.tokens)).foregroundStyle(.secondary).monospacedDigit()
                     Text(s.unpricedTokens == s.tokens && s.tokens > 0 ? "unpriced" : money(s.cost)).monospacedDigit().frame(width: 76, alignment: .trailing)

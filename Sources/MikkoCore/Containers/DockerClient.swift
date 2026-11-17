@@ -184,7 +184,8 @@ public struct DockerContainer: Sendable, Identifiable, Hashable {
         self.id = id
         name = ((d["Names"] as? [String])?.first ?? id.prefix(12).description).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         image = d["Image"] as? String ?? ""
-        isRunning = (d["State"] as? String) == "running"
+        // A container stuck restarting is alive (and looping), not stopped.
+        isRunning = ["running", "restarting"].contains(d["State"] as? String ?? "")
         status = d["Status"] as? String ?? ""
         ports = Array(Set(((d["Ports"] as? [[String: Any]]) ?? []).compactMap { ($0["PublicPort"] as? NSNumber)?.uint16Value })).sorted()
         composeProject = (d["Labels"] as? [String: String])?["com.docker.compose.project"]
@@ -220,16 +221,28 @@ public struct DockerDiskUsage: Sendable {
         for image in (df["Images"] as? [[String: Any]]) ?? [] {
             let size = n(image["Size"])
             imagesBytes += size
+            // Removing an image frees only what it does not share with other images.
+            let unique = max(size - max(n(image["SharedSize"]), 0), 0)
             let unused = n(image["Containers"]) == 0
             let dangling = ((image["RepoTags"] as? [String]) ?? []).allSatisfy { $0 == "<none>:<none>" }
-            if unused, dangling { danglingImagesBytes += size } else if unused { unusedImagesBytes += size }
+            if unused, dangling { danglingImagesBytes += unique } else if unused { unusedImagesBytes += unique }
+        }
+        // Per-image sizes count shared layers once per image; the engine's own total does not.
+        // API 1.44+ reports LayersSize, and 1.52+ an ImageUsage summary — prefer what is there.
+        if let total = ((df["ImageUsage"] as? [String: Any])?["TotalSize"] as? NSNumber)?.int64Value, total > 0 {
+            imagesBytes = total
+        } else if let layers = (df["LayersSize"] as? NSNumber)?.int64Value, layers > 0 {
+            imagesBytes = layers
         }
         for c in (df["Containers"] as? [[String: Any]]) ?? [] {
             let size = n(c["SizeRw"])
             containersBytes += size
             if (c["State"] as? String) != "running" { stoppedContainersBytes += size }
         }
-        for b in (df["BuildCache"] as? [[String: Any]]) ?? [] where (b["InUse"] as? Bool) != true { buildCacheBytes += n(b["Size"]) }
+        // What a build-cache prune frees: records neither in use nor shared with another build.
+        for b in (df["BuildCache"] as? [[String: Any]]) ?? [] where (b["InUse"] as? Bool) != true && (b["Shared"] as? Bool) != true {
+            buildCacheBytes += n(b["Size"])
+        }
         volumes = ((df["Volumes"] as? [[String: Any]]) ?? []).compactMap { v in
             guard let name = v["Name"] as? String else { return nil }
             let usage = v["UsageData"] as? [String: Any]

@@ -74,6 +74,12 @@ public struct StopPolicy: Sendable {
         [.devServer, .bundler, .simulator].contains(item.kind) && !isPinned(item) && !item.isBuilding && !item.isSystem
     }
 
+    /// "Stop all left behind": what an ended agent session left running, including its MCP servers.
+    /// Databases and containers still need their own confirmation, so they are never in the batch.
+    public func allowsOrphanBatchStop(_ item: RunningItem) -> Bool {
+        item.isOrphan && ![.database, .container, .agent].contains(item.kind) && !isPinned(item) && !item.isBuilding && !item.isSystem
+    }
+
     /// A-2: an agent may stop only what descends from its own running process. Fails closed:
     /// no known agent process on either side means no.
     public func allowsAgentStop(_ item: RunningItem, callerAgentProcess: ProcessIdentity?) -> Bool {
