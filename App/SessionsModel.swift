@@ -7,6 +7,8 @@ final class SessionsModel {
     private(set) var rows: [SessionRow] = []
     private(set) var projects: [String] = []
     private(set) var hits: [SearchHit] = []
+    /// A search is waiting or running: the list must not claim "No Results" yet.
+    private(set) var isSearching = false
     private(set) var isIndexing = false
     private(set) var indexProgress: (done: Int, total: Int) = (0, 0)
     private(set) var transcript: [TranscriptEntry] = []
@@ -56,14 +58,15 @@ final class SessionsModel {
     private func runSearch() {
         searchTask?.cancel()
         let text = searchText.trimmingCharacters(in: .whitespaces)
-        guard let database, text.count >= 2 else { hits = []; return }
+        guard let database, text.count >= 2 else { hits = []; isSearching = false; return }
         let kind = searchKind
+        isSearching = true
         searchTask = Task {
             // Wait for a pause in typing, so only the query the person settles on is run.
             try? await Task.sleep(for: .milliseconds(150))
             if Task.isCancelled { return }
             let found = await Task.detached(priority: .userInitiated) { (try? database.search(text, kind: kind)) ?? [] }.value
-            if !Task.isCancelled { hits = found }
+            if !Task.isCancelled { hits = found; isSearching = false }
         }
     }
 

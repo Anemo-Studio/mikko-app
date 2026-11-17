@@ -199,7 +199,11 @@ struct SessionsView: View {
             }
             .buttonStyle(.plain)
         }
-        .overlay { if model.hits.isEmpty { ContentUnavailableView.search(text: model.searchText) } }
+        .overlay {
+            if model.hits.isEmpty {
+                if model.isSearching { ProgressView("Searching…") } else { ContentUnavailableView.search(text: model.searchText) }
+            }
+        }
     }
 
     private func hitLabel(_ k: SearchKind) -> String {
