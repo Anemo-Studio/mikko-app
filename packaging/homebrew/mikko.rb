@@ -3,8 +3,8 @@
 #   brew install --cask anemo-studio/tap/mikko
 # scripts/release.sh prints the version and sha256 to paste here for each release.
 cask "mikko" do
-  version "0.1.0"
-  sha256 "bb11505a9cbd5b9f5a084fa76342f5832f8aad459ac8b559e2a30078d422b207"
+  version "0.4.0"
+  sha256 "507113d37411c871b5568b93a65832f592065d40dd5122b1d54540e5dfa816bf"
 
   url "https://github.com/Anemo-Studio/mikko-app/releases/download/v#{version}/mikko-#{version}.zip"
   name "mikko"
