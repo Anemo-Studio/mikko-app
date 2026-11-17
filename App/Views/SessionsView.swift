@@ -46,13 +46,20 @@ struct SessionsView: View {
         .toolbar {
             ToolbarItemGroup {
                 Menu {
-                    Section("Format") {
+                    let options = SessionExport.Options(includeTools: exportTools, includeDiffs: exportDiffs, maskSecrets: exportMask)
+                    Section("This session") {
                         ForEach(SessionExport.Format.allCases, id: \.self) { format in
-                            Button("Export as \(format.rawValue.uppercased() == "MARKDOWN" ? "Markdown" : format.rawValue.uppercased())…") {
-                                if let row = model.selected {
-                                    model.export([row], format: format, options: .init(includeTools: exportTools, includeDiffs: exportDiffs, maskSecrets: exportMask))
-                                }
+                            Button("Export as \(formatName(format))…") {
+                                if let row = model.selected { model.export([row], format: format, options: options) }
                             }
+                            .disabled(model.selected == nil)
+                        }
+                    }
+                    // S-5: everything the current filter shows, one file per session.
+                    Section("All \(model.rows.count) shown") {
+                        ForEach(SessionExport.Format.allCases, id: \.self) { format in
+                            Button("Export \(model.rows.count) as \(formatName(format))…") { model.export(model.rows, format: format, options: options) }
+                                .disabled(model.rows.isEmpty)
                         }
                     }
                     Section("Include") {
@@ -61,11 +68,15 @@ struct SessionsView: View {
                         Toggle("Hide passwords and keys", isOn: $exportMask)
                     }
                 } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                .disabled(model.selected == nil)
+                .disabled(model.rows.isEmpty)
                 Button { model.index(force: true) } label: { Label("Refresh", systemImage: "arrow.clockwise") }.disabled(model.isIndexing)
             }
         }
         .onAppear { model.index() }
+    }
+
+    private func formatName(_ f: SessionExport.Format) -> String {
+        f == .markdown ? "Markdown" : f.rawValue.uppercased()
     }
 
     private var filterBar: some View {
@@ -254,7 +265,10 @@ private struct SessionDetail: View {
                     .padding(8).background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 }
                 if let m = model.exportMessage { Label(m, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
-                if !row.originalExists {
+                if row.readsFromCopy {
+                    Label("The agent deleted the original. You are reading mikko's copy.", systemImage: "doc.on.doc")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !row.originalExists {
                     Label("The original transcript has been deleted; only the search index remains.", systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }

@@ -23,6 +23,12 @@ public struct AppDatabase: Sendable {
         "UPDATE sessions SET file_size = -1;",
         // Haiku 5.5 long prompts are now priced at their own tier: re-read every transcript once.
         "UPDATE sessions SET file_size = -1;",
+        // Search inside words: the text index moves to the trigram tokenizer and is rebuilt once.
+        """
+        DROP TABLE session_text;
+        CREATE VIRTUAL TABLE session_text USING fts5(text, path UNINDEXED, kind UNINDEXED, line UNINDEXED, tokenize='trigram');
+        UPDATE sessions SET file_size = -1, text_first = NULL, text_last = NULL;
+        """,
     ]
 
     public init(db: SQLiteDatabase) throws {

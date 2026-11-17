@@ -24,6 +24,8 @@ public struct SessionRow: Sendable, Identifiable, Hashable {
 
     public var duration: TimeInterval { max(ended.timeIntervalSince(started), 0) }
     public var originalExists: Bool { FileManager.default.fileExists(atPath: path) }
+    /// The agent deleted the original but mikko kept a copy (S-6).
+    public var readsFromCopy: Bool { !originalExists && SessionArchive().existingCopy(of: path) != nil }
 }
 
 public struct SearchHit: Sendable, Identifiable, Hashable {
@@ -197,23 +199,53 @@ extension AppDatabase {
     }
 
     /// Turns what a person typed into a safe FTS5 query: every word must match, the last as a prefix.
-    public static func ftsQuery(_ input: String) -> String? {
-        let words = input.split(whereSeparator: { $0.isWhitespace }).map { $0.replacingOccurrences(of: "\"", with: "\"\"") }.filter { !$0.isEmpty }
-        guard !words.isEmpty else { return nil }
-        return words.enumerated().map { i, w in "\"\(w)\"" + (i == words.count - 1 ? "*" : "") }.joined(separator: " ")
+    /// The search words, split into what the trigram index can match (3+ characters)
+    /// and what it cannot (shorter words, checked with LIKE on the matched rows).
+    public static func searchTerms(_ input: String) -> (indexed: [String], short: [String]) {
+        let words = input.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
+        return (words.filter { $0.count >= 3 }, words.filter { $0.count < 3 })
     }
 
-    /// S-3: full-text search across every indexed session.
+    /// An FTS5 query of quoted terms: with the trigram tokenizer each matches anywhere inside a word.
+    public static func ftsQuery(_ words: [String]) -> String? {
+        guard !words.isEmpty else { return nil }
+        return words.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }.joined(separator: " ")
+    }
+
+    static func likePattern(_ word: String) -> String {
+        "%" + word.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_") + "%"
+    }
+
+    /// A short excerpt around the first match, for searches the index could not highlight.
+    static func excerpt(_ text: String, around word: String, radius: Int = 60) -> String {
+        guard let r = text.range(of: word, options: .caseInsensitive) else { return String(text.prefix(radius * 2)) }
+        let start = text.index(r.lowerBound, offsetBy: -radius, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(r.upperBound, offsetBy: radius, limitedBy: text.endIndex) ?? text.endIndex
+        return (start > text.startIndex ? "…" : "") + text[start..<r.lowerBound] + "⟦" + text[r] + "⟧"
+            + text[r.upperBound..<end] + (end < text.endIndex ? "…" : "")
+    }
+
+    /// S-3: search across every indexed session. Matches anywhere inside words ("auth" finds "OAuth").
     public func search(_ input: String, kind: SearchKind? = nil, limit: Int = 200) throws -> [SearchHit] {
-        guard let q = Self.ftsQuery(input) else { return [] }
-        var sql = "SELECT path, kind, line, snippet(session_text, 0, '⟦', '⟧', '…', 14) FROM session_text WHERE session_text MATCH ?"
-        var params: [SQLValue] = [.text(q)]
+        let terms = Self.searchTerms(input)
+        guard !terms.indexed.isEmpty || !terms.short.isEmpty else { return [] }
+        var sql: String
+        var params: [SQLValue] = []
+        if let q = Self.ftsQuery(terms.indexed) {
+            sql = "SELECT path, kind, line, snippet(session_text, 0, '⟦', '⟧', '…', 64), text FROM session_text WHERE session_text MATCH ?"
+            params.append(.text(q))
+        } else {
+            sql = "SELECT path, kind, line, NULL, text FROM session_text WHERE 1"
+        }
+        for w in terms.short { sql += " AND text LIKE ? ESCAPE '\\'"; params.append(.text(Self.likePattern(w))) }
         if let kind { sql += " AND kind = ?"; params.append(.text(kind.rawValue)) }
-        sql += " ORDER BY rank LIMIT ?"
+        sql += terms.indexed.isEmpty ? " ORDER BY rowid DESC LIMIT ?" : " ORDER BY rank LIMIT ?"
         params.append(.int(Int64(limit)))
         return try db.query(sql, params).map { r in
-            SearchHit(path: r[0].text ?? "", kind: SearchKind(rawValue: r[1].text ?? "") ?? .user,
-                      line: Int(r[2].int ?? Int64(r[2].text ?? "") ?? 0), snippet: r[3].text ?? "")
+            let snippet = r[3].text ?? Self.excerpt(r[4].text ?? "", around: terms.short.first ?? "")
+            return SearchHit(path: r[0].text ?? "", kind: SearchKind(rawValue: r[1].text ?? "") ?? .user,
+                             line: Int(r[2].int ?? Int64(r[2].text ?? "") ?? 0), snippet: snippet)
         }
     }
 
@@ -286,8 +318,16 @@ public struct SessionIndexer: Sendable {
 
     /// Indexes new and changed transcripts. Safe to call often: unchanged files cost one `stat`.
     @discardableResult
-    public func index(into app: AppDatabase, progress: (@Sendable (Int, Int) -> Void)? = nil) -> Summary {
+    public func index(into app: AppDatabase, archive: SessionArchive? = SessionArchive.isEnabled ? SessionArchive() : nil,
+                      progress: (@Sendable (Int, Int) -> Void)? = nil) -> Summary {
         let candidates = discover()
+        // S-6: copy new or changed transcripts first, so a copy exists before the agent can delete anything.
+        if let archive {
+            for c in candidates where !Task.isCancelled {
+                archive.keep(c.path)
+                for sub in c.subagents { archive.keep(sub) }
+            }
+        }
         let known = (try? app.indexedState()) ?? [:]
         let todo = candidates.filter { c in
             guard let k = known[c.path] else { return true }
@@ -301,11 +341,12 @@ public struct SessionIndexer: Sendable {
             if let parsed, (try? app.upsert(parsed, fileSize: c.size, fileMTime: c.mtime)) != nil { summary.indexed += 1 } else { summary.failed += 1 }
         }
         progress?(todo.count, todo.count)
-        // Keeping text of transcripts the agent has deleted is an opt-in feature (S-6) that is not
-        // built yet, so for now the index never outlives the original.
+        // A session whose original is gone stays only if mikko kept a copy of it (S-6).
         if !Task.isCancelled {
             let present = Set(candidates.map(\.path))
-            for path in known.keys where !present.contains(path) && !FileManager.default.fileExists(atPath: path) {
+            let copies = SessionArchive()
+            for path in known.keys where !present.contains(path) && !FileManager.default.fileExists(atPath: path)
+                && copies.existingCopy(of: path) == nil {
                 try? app.removeSession(path: path)
             }
         }
@@ -328,7 +369,14 @@ public enum SessionActions {
         !s.isEmpty && s.allSatisfy { $0.isLetter || $0.isNumber || "/._-".contains($0) } ? s : "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// The file to read: the original, or mikko's copy once the agent has deleted it.
+    public static func readablePath(_ s: SessionRow, archive: SessionArchive = SessionArchive()) -> String? {
+        if FileManager.default.fileExists(atPath: s.path) { return s.path }
+        return archive.existingCopy(of: s.path)
+    }
+
     public static func transcript(_ s: SessionRow) -> [TranscriptEntry] {
-        s.agent == .claudeCode ? ClaudeParser.transcript(path: s.path) : CodexParser.transcript(path: s.path)
+        guard let path = readablePath(s) else { return [] }
+        return s.agent == .claudeCode ? ClaudeParser.transcript(path: path) : CodexParser.transcript(path: path)
     }
 }

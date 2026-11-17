@@ -18,6 +18,7 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var app
+    @AppStorage("keepSessionCopies") private var keepCopies = false
     @AppStorage("menuBarMetric") private var metric: MenuBarMetric = .freeDisk
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -33,6 +34,12 @@ private struct GeneralSettings: View {
                 }
             Picker("Show in menu bar", selection: $metric) {
                 ForEach(MenuBarMetric.allCases) { Text($0.title).tag($0) }
+            }
+            Section {
+                Toggle("Keep a copy of every agent session", isOn: $keepCopies)
+                    .onChange(of: keepCopies) { _, on in if on { app.sessionsModel.index(force: true) } }
+                Text("Claude Code deletes transcripts after 30 days by default. With this on, mikko keeps its own copy, readable only by you, so old sessions stay searchable and exportable.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section {
                 Toggle("Check for new versions once a day", isOn: Binding(get: { app.updateModel.enabled },

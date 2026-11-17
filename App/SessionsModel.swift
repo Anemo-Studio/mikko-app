@@ -134,7 +134,7 @@ final class SessionsModel {
             let failures = await Task.detached(priority: .userInitiated) { () -> [String] in
                 var failures: [String] = []
                 for row in rows {
-                    guard row.originalExists else { failures.append("\(row.title.prefix(40)): the transcript no longer exists"); continue }
+                    guard row.originalExists || row.readsFromCopy else { failures.append("\(row.title.prefix(40)): the transcript no longer exists"); continue }
                     let text = SessionExport.render(row, entries: SessionActions.transcript(row), format: format, options: options)
                     // Never replace a file that is already there.
                     var url = dir.appendingPathComponent(SessionExport.fileName(for: row, format: format))

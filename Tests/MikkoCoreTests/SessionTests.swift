@@ -155,7 +155,9 @@ private func claudeFixture() -> [[String: Any]] {
     #expect(abs(row.cost - expected) < 1e-9 && row.hasUnpriced)
 
     #expect(try app.search("already in").first?.snippet.contains("⟦already⟧") == true)
-    #expect(Set(try app.search("lso").map(\.kind)) == [.command, .assistant]) // prefix match on the last word
+    #expect(Set(try app.search("lso").map(\.kind)) == [.command, .assistant]) // matches inside words
+    #expect(try app.search("sof").isEmpty == false)                           // …including the middle of one
+    #expect(try app.search("ls").isEmpty == false)                            // short words fall back to LIKE
     #expect(try app.search("lso", kind: .command).count == 1)
     #expect(try app.search("lsof", kind: .user).isEmpty)
     #expect(try app.search("server.js", kind: .file).count == 1)
@@ -341,4 +343,22 @@ private func claudeFixture() -> [[String: Any]] {
     // 20k × $0.50 + 90k × $0.05 + 1k × $2.50 per million
     #expect(abs((Pricing.cost(model: tagged, usage: long) ?? 0) - 0.017) < 1e-9)
     #expect(Pricing.billingModel("claude-opus-5-5", long) == "claude-opus-5-5")
+}
+
+@Test func sessionCopiesMirrorOriginalsAndStayPrivate() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("mikko-arch-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: base) }
+    let home = "\(base)/home", original = "\(home)/.claude/projects/shop/abc.jsonl"
+    try FileManager.default.createDirectory(atPath: (original as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try "{\"type\":\"user\"}\n".write(toFile: original, atomically: true, encoding: .utf8)
+    let archive = SessionArchive(root: "\(base)/copies", home: home)
+    #expect(archive.keep(original))
+    let copy = try #require(archive.existingCopy(of: original))
+    #expect(copy == "\(base)/copies/.claude/projects/shop/abc.jsonl")
+    let perms = try FileManager.default.attributesOfItem(atPath: copy)[.posixPermissions] as? Int
+    #expect(perms == 0o600)
+    // The original is deleted by the agent: the copy remains.
+    try FileManager.default.removeItem(atPath: original)
+    #expect(archive.existingCopy(of: original) != nil)
+    #expect(archive.copyPath(for: "/etc/passwd") == nil)
 }
