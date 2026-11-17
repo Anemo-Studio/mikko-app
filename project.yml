@@ -1,0 +1,65 @@
+name: Mikko
+options:
+  bundleIdPrefix: app.mikko
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  Mikko:
+    path: .
+targets:
+  Mikko:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: Mikko
+        product: MikkoCore
+      # The command-line tool / MCP server ships inside the app at Contents/Helpers/mikko,
+      # so an Xcode archive (and therefore notarization) always contains it.
+      - target: mikko-cli
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_NAME: mikko
+        PRODUCT_BUNDLE_IDENTIFIER: app.mikko.Mikko
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: "6.0"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 Anemo"
+        INFOPLIST_KEY_NSDocumentsFolderUsageDescription: "mikko measures build folders and caches in the project folders you add, so it can show what is safe to clean."
+        INFOPLIST_KEY_NSDesktopFolderUsageDescription: "mikko measures build folders and caches in the project folders you add, so it can show what is safe to clean."
+        INFOPLIST_KEY_NSDownloadsFolderUsageDescription: "mikko measures build folders and caches in the project folders you add, so it can show what is safe to clean."
+        INFOPLIST_KEY_NSNetworkVolumesUsageDescription: "mikko measures build folders and caches in the project folders you add, so it can show what is safe to clean."
+        INFOPLIST_KEY_NSRemovableVolumesUsageDescription: "mikko measures build folders and caches in the project folders you add, so it can show what is safe to clean."
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: "mikko asks Finder to empty the Trash and opens your terminal or editor when you choose to."
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_ENTITLEMENTS: App/Mikko.entitlements
+  mikko-cli:
+    type: tool
+    platform: macOS
+    sources: [Sources/mikko]
+    dependencies:
+      - package: Mikko
+        product: MikkoCore
+    settings:
+      base:
+        PRODUCT_NAME: mikko
+        PRODUCT_MODULE_NAME: MikkoCLI
+        PRODUCT_BUNDLE_IDENTIFIER: app.mikko.cli
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        SWIFT_VERSION: "6.0"
+        SKIP_INSTALL: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
